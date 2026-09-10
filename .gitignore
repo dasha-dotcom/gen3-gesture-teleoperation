@@ -1,0 +1,34 @@
+# macOS
+.DS_Store
+._*
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ROS 2 / colcon generated outputs (at any directory depth)
+build/
+install/
+log/
+
+# Python packaging outputs
+*.egg-info/
+dist/
+
+# Local editor configuration and temporary files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
