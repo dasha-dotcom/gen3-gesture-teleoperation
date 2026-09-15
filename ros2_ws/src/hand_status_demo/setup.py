@@ -1,3 +1,5 @@
+import os
+from glob import glob
 from setuptools import find_packages, setup
 
 package_name = 'hand_status_demo'
@@ -10,6 +12,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+	(os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -25,6 +28,9 @@ setup(
     entry_points={
         'console_scripts': [
         	'hand_status_publisher = hand_status_demo.hand_status_publisher:main',
+		'hand_status_subscriber = hand_status_demo.hand_status_subscriber:main',
+		'hand_position_publisher = hand_status_demo.hand_position_publisher:main',
+		'hand_position_subscriber = hand_status_demo.hand_position_subscriber:main',
     	],
     },
 )

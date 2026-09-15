@@ -10,7 +10,10 @@ class HandStatusPublisher(Node):
 			'hand_status',
 			10
 		)
-		self.timer = self.create_timer(1.0, self.publish_status)
+
+		self.declare_parameter('publish_period', 1.0)
+		publish_period = self.get_parameter('publish_period').value
+		self.timer = self.create_timer(publish_period, self.publish_status)
 	def publish_status(self):
 		msg = String()
 		msg.data = 'HAND_VISIBLE'
