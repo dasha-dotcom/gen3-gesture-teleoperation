@@ -1,34 +1,80 @@
+# Environment and setup record
 
-## Verified Local Development Environment
+## Verified development environment
 
-Host:
-- Apple M3 Mac
-- macOS
-- UTM / QEMU
+| Component | Current setup |
+|---|---|
+| Host | Apple M3 Mac, macOS |
+| Camera Python | Python 3.11 virtual environment in `~/gen3_camera/.venv311` |
+| Perception | MediaPipe 0.10.21, OpenCV contrib 4.11.0.86 |
+| Virtualization | UTM / QEMU |
+| Guest | Ubuntu 24.04.5 LTS, ARM64 / aarch64 |
+| Robotics | ROS 2 Jazzy, MoveIt 2, MoveIt Servo, ros2_control |
+| Robot model | Gen3 seven joints + Robotiq 2F-85, provisional lab match |
+| Hardware backend | `mock_components/GenericSystem` |
 
-Guest:
-- Ubuntu 24.04.5 LTS
-- ARM64 / aarch64
+Package revisions for the complete ROS installation and upstream source commits have not yet been pinned. This documents the existing working setup, rather than claiming a tested fresh installation.
 
-ROS:
-- ROS 2 Jazzy
-- Installed using official ROS Ubuntu packages
+## External robot workspace
 
-MoveIt:
-- MoveIt 2 installed
-- MoveIt Setup Assistant launches successfully
-- moveit_servo installed and discoverable by ROS
+Existing sources live at:
 
-ROS workspace:
-- ros2_ws/
-- colcon build verified
-- hand_status_demo package verified
+```text
+~/workspace/ros2_kortex_ws/src/ros2_kortex
+~/workspace/ros2_kortex_ws/src/ros2_robotiq_gripper
+```
 
-External Kinova workspace:
-- ~/workspace/ros2_kortex_ws
-- ros2_kortex Jazzy source obtained
-- dependencies imported with vcstool
+The successful focused build uses only description/configuration packages:
 
-Known limitation:
-- Full ros2_kortex build has not been attempted on this ARM64 VM.
-- Kinova integration will be verified on the appropriate x86-64 Ubuntu lab environment.
+```bash
+source /opt/ros/jazzy/setup.bash
+mkdir -p ~/workspace/gen3_viewer_ws
+cd ~/workspace/gen3_viewer_ws
+colcon build --base-paths \
+  ~/workspace/ros2_kortex_ws/src/ros2_kortex/kortex_description \
+  ~/workspace/ros2_kortex_ws/src/ros2_robotiq_gripper/robotiq_description \
+  ~/workspace/ros2_kortex_ws/src/ros2_kortex/kortex_moveit_config/kinova_gen3_7dof_robotiq_2f_85_moveit_config \
+  --executor sequential
+source install/local_setup.bash
+```
+
+`--base-paths` limits discovery to these packages; `--executor sequential` builds one at a time. The workspace overlay makes them discoverable alongside system ROS packages. Earlier broader builds failed; a complete hardware-driver build is not established by this focused success.
+
+Installed tools used along the way include `joint_state_publisher_gui`, `ros2controlcli`, controller manager, joint trajectory controller, joint-state broadcaster, position gripper controller, MoveIt, Servo, and Ubuntu Tkinter. `mock_components` is a plugin supplied by `hardware_interface`, not a separate package to locate with `ros2 pkg prefix`.
+
+## Put the scripts in the exercise directories
+
+From the repository root **on the Mac**, copy only the Mac scripts:
+
+```bash
+mkdir -p ~/gen3_camera
+cp scripts/mac/hand_sender.py scripts/mac/hand_sender_gap_test.py ~/gen3_camera/
+```
+
+From the repository root **inside Ubuntu**, copy the Ubuntu scripts/configuration:
+
+```bash
+mkdir -p ~/gen3_exercises
+cp scripts/ubuntu/*.py scripts/ubuntu/*.yaml ~/gen3_exercises/
+```
+
+These copy commands replace matching exercise files. If your working copies have newer edits, compare them first. Download or check out this repository in both systems; their home directories are separate. The scripts preserve the tested exercise filenames, including `v3` for the calibrated bridge and `v2` for the offset helper. Older alternatives are not included.
+
+The Servo configuration and launch are preserved from the exercise instructions. This repository capture has not independently compared them with the VM's current files or relaunched the full stack.
+
+## Mac dependencies
+
+Use the existing `.venv311` environment if it works. For a new environment, these are the recorded direct dependencies (installation on a clean machine has not been re-tested):
+
+```bash
+python3.11 -m venv ~/gen3_camera/.venv311
+source ~/gen3_camera/.venv311/bin/activate
+python -m pip install -r scripts/mac/requirements.txt
+python -c "import mediapipe as mp; import cv2; print(mp.__version__, cv2.__version__)"
+```
+
+Run these from the repository root. Python 3.9 failed on dependency syntax; Python 3.11 imports and live hand tracking worked. The installed MediaPipe wheel has an inconsistent platform tag, so `pip check` reported that it was unsupported despite working imports/inference on this Mac. This warning remains documented, not repaired. The requirements file pins direct dependencies only, not the whole transitive environment.
+
+## Run the system
+
+Follow [the restart guide](mock-teleoperation.md) for separate robot, temporary gripper fix, Servo, bridge, and camera terminals. Always source ROS and the viewer overlay in fresh Ubuntu exercise terminals.
