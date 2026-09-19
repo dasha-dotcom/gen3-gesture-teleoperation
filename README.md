@@ -1,186 +1,64 @@
 # Human Gesture-Based Robot Telemanipulation
 
-A PIONEER Lab / NJIT research practice project exploring webcam-detected human hand/arm motion to teleoperate a KINOVA Gen3 robotic arm for simulated pick-and-place tasks.
+A PIONEER Lab / NJIT research practice project exploring webcam-detected hand motion to teleoperate a KINOVA Gen3 for simulated pick-and-place tasks.
 
-The project is simulation-first. The eventual interface should provide intuitive start/pause behavior, safe hand-to-robot motion mapping, and natural gripper control.
+**September 19, 2026 milestone: calibrated webcam control of mock Gen3 motion in y/z.**
 
-**Current status: Stage 0 — Environment and repository setup (in progress).**
-
-## Environment
-
-### Development Machine
-
-- Host: Apple Silicon Mac (M3)
-- Host OS: macOS
-- Virtualization: UTM / QEMU
-- Guest OS: Ubuntu 24.04.5 LTS
-- Guest architecture: ARM64 / `aarch64`
-
-### ROS Environment
-
-- ROS distribution: ROS 2 Jazzy
-- ROS installation: installed and verified inside the Ubuntu VM
-- ROS sourcing:
-
-```bash
-source /opt/ros/jazzy/setup.bash
-```
-
-- Workspace:
+The Mac camera tracks a palm with MediaPipe. A small UDP message carries its normalized coordinates into an Ubuntu VM, where a hold-to-run interface feeds MoveIt Servo. RViz displays the resulting robot state.
 
 ```text
-ros2_ws/
-└── src/
+Mac camera → MediaPipe → UDP palm coordinates → Ubuntu hand bridge
+           → MoveIt Servo → joint trajectory controller → mock Gen3 → RViz
 ```
 
-ROS 2 Jazzy currently needs to be sourced manually in each fresh terminal before ROS commands are available. Automatic shell sourcing has not yet been configured.
+## What works so far
 
-### Current ROS Verification
+- ROS 2 fundamentals and the original `hand_status_demo` package.
+- Seven-joint Gen3 + Robotiq 2F-85 model, mock controllers, MoveIt planning/execution, and gripper open/partial-close commands.
+- Python endpoint-offset exercises in base-frame x/y/z and keyboard Servo controls.
+- Camera tracking on the Mac and hand-data delivery into Ubuntu.
+- Calibrated y/z velocity requests while holding Space; a neutral rest zone and balanced positive/negative scaling.
+- Observed stop on hand loss and on a deliberate message gap; returning hand/data stayed disabled until a fresh enable action.
 
-The following have been successfully tested:
+**These are mock-hardware results.** No physics-based grasping, physical robot performance, or real-robot stopping behavior has been validated. The arm/gripper choice still needs confirmation against the lab setup.
 
-- ROS 2 Jazzy installation
-- ROS publisher/subscriber communication using the standard talker/listener demos
-- `ros2 node list`
-- `ros2 topic list`
-- `ros2 topic echo`
-- `ros2 topic info`
-- `colcon build`
-- Workspace sourcing with:
+## Start here
 
-```bash
-source ros2_ws/install/setup.bash
-```
+- [Environment and focused build](docs/setup.md)
+- [Restart, operation, and stopping behavior](docs/mock-teleoperation.md)
+- [Architecture and design choices](docs/architecture.md)
+- [Script inventory and checks](scripts/README.md)
+- [September 19 milestone and remaining work](notes/2026-09-19.md)
+- [Earlier research log](notes/2026-09-10.md)
 
-A custom Python ROS 2 package, `hand_status_demo`, has also been created and successfully built.
+The current scripts are exercises for this specific Mac/VM setup. The restart guide assumes the previously prepared ROS environment; it is not yet a verified clean-machine installer.
 
-It currently provides:
-
-- Node:
+## Repository layout
 
 ```text
-/hand_status_publisher
+ros2_ws/src/hand_status_demo/  Original ROS publisher/subscriber exercises
+scripts/mac/                 Camera sender and deliberate message-gap test
+scripts/ubuntu/              Hand bridge, Servo config/launch, earlier exercises
+tests/                       Dependency-free hand-mapping and gating checks
+docs/                        Setup, architecture, and restart instructions
+notes/                       Dated progress and limitations
 ```
 
-- Topic:
-
-```text
-/hand_status
-```
-
-- Message type:
-
-```text
-std_msgs/msg/String
-```
-
-- Test message:
-
-```text
-HAND_VISIBLE
-```
-
-The package is intended only as a small ROS learning and workspace-verification exercise before development of the actual teleoperation nodes.
-
-### Robotics Stack Status
-
-- MoveIt 2: not yet installed/verified
-- KINOVA `ros2_kortex`: not yet installed/verified
-- Gen3 configuration: TBD
-- Gripper configuration: TBD
-- Final x86-64 lab environment: TBD / awaiting confirmation
-
-The current ARM64 Ubuntu VM is being used for ROS 2 learning, development, and general project work. Kinova-specific compatibility will be verified separately before relying on this VM for the Gen3 stack.
-
-## Planned Architecture
-
-```text
-Webcam
-    ↓
-Hand tracking / MediaPipe
-    ↓
-Gesture + interface logic
-    ↓
-Teleoperation mapping
-    ↓
-ROS 2 messages
-    ↓
-MoveIt / controller
-    ↓
-KINOVA Gen3 simulation
-    ↓
-Pick-and-place task
-```
-
-The system is intentionally divided into separate layers so that perception, ROS communication, robot control, and interface behavior can be tested independently.
-
-See [architecture](docs/architecture.md) for planned subsystem responsibilities.
-
-## ROS Workspace Structure
-
-```text
-ros2_ws/
-├── src/
-│   └── hand_status_demo/
-├── build/      # generated by colcon, not tracked by Git
-├── install/    # generated by colcon, not tracked by Git
-└── log/        # generated by colcon, not tracked by Git
-```
-
-Only source code under `ros2_ws/src/` is committed to the repository. Generated `build/`, `install/`, and `log/` directories are excluded through `.gitignore`.
-
-## Development Strategy
-
-1. Prove each subsystem independently.
-2. Do not debug vision, ROS communication, robot control, and gripper logic simultaneously.
-3. Build the smallest working version first.
-4. Commit known-working milestones to Git.
-5. Record non-obvious setup commands and exact environment/version information.
-6. Verify generated commands and interfaces directly through ROS tools before integrating subsystems.
+Only source/configuration and documentation belong here. Virtual environments and generated ROS `build/`, `install/`, and `log/` directories are excluded.
 
 ## Roadmap
 
-- Stage 0 — Environment + project skeleton
-- Stage 1 — ROS 2 fundamentals
-- Stage 2 — Gen3 simulation
-- Stage 3 — Robot control without vision
-- Stage 4 — Webcam hand tracking
-- Stage 5 — Gesture/interface state machine
-- Stage 6 — Publish perception into ROS
-- Stage 7 — Map hand motion to arm motion
-- Stage 8 — Gripper integration
-- Stage 9 — Pick-and-place
-- Stage 10 — Interface enhancement/evaluation
-- Stage 11 — Documentation/demo
+The original stages remain useful, but development now overlaps them:
 
-## Current Stage 0 Progress
+- Stages 0–1: environment and ROS foundations exercised.
+- Stage 2: Gen3 mock model/controllers/MoveIt exercised; physics simulation remains separate.
+- Stage 3: control without vision exercised with offsets and keyboard input.
+- Stages 4–7: webcam tracking, enable/stop logic, transport, and y/z mapping integrated as an initial prototype.
+- Stage 8: direct gripper commands exercised; gesture gripper integration is next.
+- Stages 9–11: pick-and-place, interface evaluation, and final demo/documentation remain.
 
-Completed:
+Webcam x control, orientation control, gesture gripper commands, quantified stopping/latency tests, and task-level pick-and-place remain open. Planned-motion action cancellation also remains unresolved; see the [milestone notes](notes/2026-09-19.md).
 
-- Ubuntu 24.04.5 ARM64 VM created
-- ROS 2 Jazzy installed
-- ROS sourcing verified
-- ROS publisher/subscriber communication tested
-- ROS topics and nodes inspected from the command line
-- ROS workspace created
-- Workspace successfully built with `colcon`
-- Custom Python ROS package created
-- Custom publisher node successfully run
-- Git repository structure established
-- ROS-generated build outputs excluded from version control
+## Reference project
 
-Remaining:
-
-- Document final environment decisions
-- Verify MoveIt 2
-- Confirm Gen3 configuration
-- Confirm gripper configuration
-- Verify the Kinova ROS 2 stack on an appropriate supported environment
-- Create a known-working Stage 0 Git checkpoint
-
-## Project Documentation
-
-- [Setup and environment decisions](docs/setup.md)
-- [Planned subsystem architecture](docs/architecture.md)
-- [September 10, 2026 research log](notes/2026-09-10.md)
-- [Future reproducible scripts](scripts/README.md)
+Dr. Lin's reference example is [FrankaTeleop](https://github.com/gjcliff/FrankaTeleop), with its [project writeup](https://graham-clifford.com/Robot-Arm-Teleoperation-Through-Computer-Vision-Hand-Tracking/). It informs the separation of perception, mapping, and robot control. This repository uses a Gen3, ROS 2 Jazzy, a Mac camera, and an Ubuntu ARM64 VM.
