@@ -1,7 +1,6 @@
-"""Add Servo to the already-running Gen3 mock robot and MoveIt launch."""
 from pathlib import Path
-
 import yaml
+
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
@@ -10,7 +9,8 @@ from moveit_configs_utils import MoveItConfigsBuilder
 def generate_launch_description():
     model = (
         MoveItConfigsBuilder(
-            "gen3", package_name="kinova_gen3_7dof_robotiq_2f_85_moveit_config"
+            "gen3",
+            package_name="kinova_gen3_7dof_robotiq_2f_85_moveit_config",
         )
         .robot_description(mappings={
             "robot_ip": "xxx.yyy.zzz.www",
@@ -24,9 +24,11 @@ def generate_launch_description():
         })
         .to_moveit_configs()
     )
+
     config_path = Path(__file__).resolve().parent / "gen3_servo.yaml"
     with config_path.open() as config_file:
         servo_settings = yaml.safe_load(config_file)
+
     servo_node = Node(
         package="moveit_servo",
         executable="servo_node",
@@ -41,4 +43,5 @@ def generate_launch_description():
             {"use_sim_time": False},
         ],
     )
+
     return LaunchDescription([servo_node])
