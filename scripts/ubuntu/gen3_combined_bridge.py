@@ -73,6 +73,27 @@ def direction(value, center=0.5):
     )
 
 
+def depth_direction(ratio):
+    """Map calibrated apparent palm size to a unitless x preview."""
+    deadzone = 0.10
+
+    if 1.0 - deadzone <= ratio <= 1.0 + deadzone:
+        return 0.0
+
+    if ratio > 1.0 + deadzone:
+        return min(
+            (ratio - (1.0 + deadzone))
+            / (1.60 - (1.0 + deadzone)),
+            1.0,
+        )
+
+    return -min(
+        ((1.0 - deadzone) - ratio)
+        / ((1.0 - deadzone) - 0.60),
+        1.0,
+    )
+
+
 class Gate:
     def __init__(self):
         self.seq = -1
@@ -81,9 +102,11 @@ class Gate:
 
         self.u = 0.5
         self.v = 0.5
+        self.palm_width = 0.0
 
         self.center_u = 0.5
         self.center_v = 0.5
+        self.center_width = None
 
         self.started = None
         self.reason = "Not enabled"
@@ -157,21 +180,28 @@ class Gate:
             return
 
         if hand:
-            values = (
-                message.get("u"),
-                message.get("v"),
-            )
+            u = message.get("u")
+            v = message.get("v")
+            palm_width = message.get("palm_width")
 
-            if not all(
-                type(value) in (int, float)
-                and 0.0 <= value <= 1.0
-                for value in values
+            if not (
+                type(u) in (int, float)
+                and type(v) in (int, float)
+                and type(palm_width) in (int, float)
+                and math.isfinite(u)
+                and math.isfinite(v)
+                and math.isfinite(palm_width)
+                and 0.0 <= u <= 1.0
+                and 0.0 <= v <= 1.0
+                and palm_width > 0.0
             ):
                 self.hand = False
-                self.stop("Invalid hand coordinates")
+                self.stop("Invalid hand coordinates/depth")
                 return
 
-            self.u, self.v = values
+            self.u = u
+            self.v = v
+            self.palm_width = palm_width
 
         # A packet after a data gap must not automatically resume motion.
         if (
@@ -229,6 +259,7 @@ class Gate:
 
         self.center_u = self.u
         self.center_v = self.v
+        self.center_width = self.palm_width
 
         self.calibrated = True
 
@@ -236,7 +267,21 @@ class Gate:
             "Neutral position saved — hold Space when ready"
         )
 
+    def depth_preview(self):
+        if (
+            not self.calibrated
+            or self.center_width is None
+            or self.center_width <= 0.0
+        ):
+            return 0.0, None
+
+        ratio = self.palm_width / self.center_width
+
+        return depth_direction(ratio), ratio
+
     def desired(self):
+        x, _ = self.depth_preview()
+
         y = direction(
             self.u,
             self.center_u,
@@ -247,16 +292,23 @@ class Gate:
             self.center_v,
         )
 
+        # Z is intentionally slower than X/Y.
+        z *= 2.0 / 3.0
+
+        # Cap the total translation magnitude.
         scale = max(
             1.0,
-            math.hypot(y, z),
+            math.sqrt(
+                x * x
+                + y * y
+                + z * z
+            ),
         )
 
-        # Current Servo linear scale is 0.02 m/s.
-        # Y reaches full scale; Z is intentionally slower.
         return (
-            1.0 * y / scale,
-            (2.0 / 3.0) * z / scale,
+            x / scale,
+            y / scale,
+            z / scale,
         )
 
     def command(self, now):
@@ -264,6 +316,7 @@ class Gate:
             self.stop(self.fault)
 
             return (
+                0.0,
                 0.0,
                 0.0,
                 f"STOP: {self.fault}",
@@ -284,13 +337,14 @@ class Gate:
                 reason = (
                     self.reason
                     if self.reason
-                    == "Invalid hand coordinates"
+                    == "Invalid hand coordinates/depth"
                     else "Hand no longer detected"
                 )
 
             self.stop(reason)
 
             return (
+                0.0,
                 0.0,
                 0.0,
                 f"STOP: {self.reason}",
@@ -300,17 +354,18 @@ class Gate:
             return (
                 0.0,
                 0.0,
+                0.0,
                 f"STOP: {self.reason}",
             )
 
-        y, z = self.desired()
+        x, y, z = self.desired()
 
-        if y == 0 and z == 0:
+        if x == 0 and y == 0 and z == 0:
             status = "Enabled — hand in rest zone"
         else:
             status = "Enabled — sending motion input"
 
-        return y, z, status
+        return x, y, z, status
 
 
 def call(node, service, name, request):
@@ -557,7 +612,7 @@ class Window:
         )
 
         self.values = tk.StringVar(
-            value="Requested y=0, z=0 mm/s"
+            value="Sent x=0, y=0, z=0 mm/s"
         )
 
         self.preview = tk.StringVar(
@@ -591,6 +646,7 @@ class Window:
                 "Release Space or switch windows to stop.\n"
                 "Hand right/left: +/-y. "
                 "Hand up/down: +/-z.\n"
+                "Hand closer/farther: +/-x.\n"
                 "OPEN: open gripper. "
                 "CLOSED: partial close.\n"
                 "A singularity halt automatically triggers "
@@ -1156,6 +1212,7 @@ class Window:
 
     def send(
         self,
+        x=0.0,
         y=0.0,
         z=0.0,
     ):
@@ -1167,6 +1224,7 @@ class Window:
 
         msg.header.frame_id = "base_link"
 
+        msg.twist.linear.x = x
         msg.twist.linear.y = y
         msg.twist.linear.z = z
 
@@ -1191,10 +1249,18 @@ class Window:
 
         self.send()
 
+        if self.gate.center_width is None:
+            width_text = "not set"
+        else:
+            width_text = (
+                f"{self.gate.center_width:.1f}px"
+            )
+
         self.calibration.set(
             f"Neutral: "
             f"u={self.gate.center_u:.3f}, "
-            f"v={self.gate.center_v:.3f}"
+            f"v={self.gate.center_v:.3f}, "
+            f"width={width_text}"
         )
 
     def press(self, event):
@@ -1318,6 +1384,7 @@ class Window:
 
         # While recovery is active, never send webcam motion.
         if self.singularity_latched:
+            x = 0.0
             y = 0.0
             z = 0.0
 
@@ -1327,11 +1394,12 @@ class Window:
             )
 
         else:
-            y, z, status = (
+            x, y, z, status = (
                 self.gate.command(now)
             )
 
         self.send(
+            x,
             y,
             z,
         )
@@ -1346,23 +1414,38 @@ class Window:
 
         self.values.set(
             "Sent request: "
+            f"x={20 * x:+.1f}, "
             f"y={20 * y:+.1f}, "
             f"z={20 * z:+.1f} mm/s\n"
             f"Message {self.gate.seq}"
         )
 
         if self.gate.ready(now):
-            preview_y, preview_z = (
+            preview_x, preview_y, preview_z = (
                 self.gate.desired()
             )
 
+            _, depth_ratio = (
+                self.gate.depth_preview()
+            )
+
+            if depth_ratio is None:
+                depth_text = "not calibrated"
+            else:
+                depth_text = (
+                    f"{depth_ratio:.2f}x"
+                )
+
             self.preview.set(
                 "Hand preview: "
+                f"x={20 * preview_x:+.1f}, "
                 f"y={20 * preview_y:+.1f}, "
                 f"z={20 * preview_z:+.1f} mm/s\n"
                 f"Palm: "
                 f"u={self.gate.u:.3f}, "
-                f"v={self.gate.v:.3f}\n"
+                f"v={self.gate.v:.3f}, "
+                f"width={self.gate.palm_width:.1f}px, "
+                f"depth={depth_text}\n"
                 f"Gesture: {self.gate.gesture}"
             )
 
