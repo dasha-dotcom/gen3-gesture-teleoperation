@@ -196,14 +196,14 @@ class PickPlaceWatch(Node):
         future = self.get_scene.call_async(request)
         future.add_done_callback(self.after_scene)
 
-    def fingertip_midpoint(self):
+    def fingertip_midpoint(self, target_frame):
         left_tf = self.tf_buffer.lookup_transform(
-            BASE_FRAME,
+            target_frame,
             LEFT_TIP_LINK,
             Time(),
         )
         right_tf = self.tf_buffer.lookup_transform(
-            BASE_FRAME,
+            target_frame,
             RIGHT_TIP_LINK,
             Time(),
         )
@@ -282,19 +282,16 @@ class PickPlaceWatch(Node):
                 self.finish_operation()
                 return
 
-            if cube.header.frame_id not in ("", BASE_FRAME):
-                self.get_logger().warning(
-                    "CLOSED: cube frame is "
-                    f"{cube.header.frame_id!r}, expected {BASE_FRAME!r}."
-                )
-                self.finish_operation()
-                return
+            cube_frame = cube.header.frame_id or BASE_FRAME
 
             try:
-                grasp_x, grasp_y, grasp_z = self.fingertip_midpoint()
+                grasp_x, grasp_y, grasp_z = self.fingertip_midpoint(
+                    cube_frame
+                )
             except Exception as exc:
                 self.get_logger().warning(
-                    f"Could not read fingertip transforms: {exc}"
+                    "Could not read fingertip transforms in "
+                    f"{cube_frame!r}: {exc}"
                 )
                 self.finish_operation()
                 return
@@ -317,7 +314,8 @@ class PickPlaceWatch(Node):
                 self.last_distance_log = now
                 self.get_logger().info(
                     "CLOSED: cube/fingertip-midpoint distance = "
-                    f"{distance * 100:.1f} cm."
+                    f"{distance * 100:.1f} cm "
+                    f"in frame {cube_frame!r}."
                 )
 
             if distance > GRASP_RADIUS:
