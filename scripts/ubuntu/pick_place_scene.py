@@ -7,6 +7,7 @@ Actions:
 - remove: remove the cube completely
 - attach: attach the existing world cube to the Robotiq end effector
 - detach: detach the cube and return it to the world at its current pose
+- allow-gripper-contact: allow only the Robotiq/gripper links to contact the cube
 """
 
 import argparse
@@ -16,12 +17,14 @@ from rclpy.node import Node
 
 from geometry_msgs.msg import Pose
 from moveit_msgs.msg import (
+    AllowedCollisionEntry,
     AttachedCollisionObject,
     CollisionObject,
     ObjectColor,
     PlanningScene,
+    PlanningSceneComponents,
 )
-from moveit_msgs.srv import ApplyPlanningScene
+from moveit_msgs.srv import ApplyPlanningScene, GetPlanningScene
 from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import ColorRGBA
 
@@ -30,8 +33,8 @@ OBJECT_ID = "pick_cube"
 FRAME_ID = "base_link"
 END_EFFECTOR_LINK = "end_effector_link"
 
-# Links allowed to touch the cube while it is attached. These are the
-# Robotiq 2F-85 links in the Kinova Gen3 + Robotiq MoveIt configuration.
+# Links that may legitimately touch the cube during a grasp. Other robot
+# links still treat pick_cube as a normal collision object.
 TOUCH_LINKS = (
     "end_effector_link",
     "robotiq_85_base_link",
@@ -108,9 +111,8 @@ def make_attach_scene():
     attached.object.operation = CollisionObject.ADD
     attached.touch_links = list(TOUCH_LINKS)
 
-    # No geometry is included here on purpose. MoveIt will find OBJECT_ID in
-    # the world, remove it from the world, transform its existing pose into
-    # END_EFFECTOR_LINK, and preserve that relative pose while the arm moves.
+    # No geometry is included here on purpose. MoveIt finds OBJECT_ID in the
+    # world, removes it, and preserves its pose relative to END_EFFECTOR_LINK.
     scene.robot_state.attached_collision_objects.append(attached)
 
     return scene
@@ -126,8 +128,6 @@ def make_detach_scene():
     attached.object.id = OBJECT_ID
     attached.object.operation = CollisionObject.REMOVE
 
-    # Removing an attached body causes MoveIt to put it back into the world
-    # at the body's current global pose.
     scene.robot_state.attached_collision_objects.append(attached)
 
     return scene
@@ -157,12 +157,84 @@ def apply_scene(node, scene):
     if not future.result().success:
         raise RuntimeError("MoveIt rejected the planning-scene update.")
 
+    node.destroy_client(client)
+
+
+def get_allowed_collision_matrix(node):
+    client = node.create_client(
+        GetPlanningScene,
+        "/get_planning_scene",
+    )
+
+    if not client.wait_for_service(timeout_sec=5.0):
+        raise RuntimeError(
+            "MoveIt service /get_planning_scene is unavailable."
+        )
+
+    request = GetPlanningScene.Request()
+    request.components.components = (
+        PlanningSceneComponents.ALLOWED_COLLISION_MATRIX
+    )
+
+    future = client.call_async(request)
+    rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
+
+    if not future.done() or future.result() is None:
+        raise RuntimeError("No response from /get_planning_scene.")
+
+    matrix = future.result().scene.allowed_collision_matrix
+    node.destroy_client(client)
+    return matrix
+
+
+def ensure_acm_name(matrix, name):
+    if name in matrix.entry_names:
+        return
+
+    old_size = len(matrix.entry_names)
+    matrix.entry_names.append(name)
+
+    # Expand every existing row by one column.
+    for row in matrix.entry_values:
+        row.enabled.append(False)
+
+    # Add the new square-matrix row.
+    row = AllowedCollisionEntry()
+    row.enabled = [False] * (old_size + 1)
+    matrix.entry_values.append(row)
+
+
+def make_allow_gripper_contact_scene(node):
+    matrix = get_allowed_collision_matrix(node)
+
+    for name in (OBJECT_ID, *TOUCH_LINKS):
+        ensure_acm_name(matrix, name)
+
+    cube_index = matrix.entry_names.index(OBJECT_ID)
+
+    for link in TOUCH_LINKS:
+        link_index = matrix.entry_names.index(link)
+        matrix.entry_values[cube_index].enabled[link_index] = True
+        matrix.entry_values[link_index].enabled[cube_index] = True
+
+    scene = PlanningScene()
+    scene.is_diff = True
+    scene.allowed_collision_matrix = matrix
+
+    return scene
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "action",
-        choices=("add", "remove", "attach", "detach"),
+        choices=(
+            "add",
+            "remove",
+            "attach",
+            "detach",
+            "allow-gripper-contact",
+        ),
         help="Planning-scene action for the test cube",
     )
     args = parser.parse_args()
@@ -191,11 +263,21 @@ def main():
                 "Move the mock arm to verify that the cube follows."
             )
 
-        else:
+        elif args.action == "detach":
             apply_scene(node, make_detach_scene())
             print(
                 f"Detached {OBJECT_ID} from {END_EFFECTOR_LINK} "
                 "and returned it to the world."
+            )
+
+        else:
+            apply_scene(
+                node,
+                make_allow_gripper_contact_scene(node),
+            )
+            print(
+                "Allowed pick_cube contact with Robotiq/gripper links only. "
+                "Servo collision checking remains enabled for the rest of the robot."
             )
 
     finally:
