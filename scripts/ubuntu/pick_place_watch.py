@@ -12,6 +12,7 @@ Mock-hardware / planning-scene behavior only. No contact physics are simulated.
 """
 
 import math
+import time
 
 import rclpy
 from rclpy.node import Node
@@ -31,16 +32,19 @@ from tf2_ros import Buffer, TransformListener
 OBJECT_ID = "pick_cube"
 BASE_FRAME = "base_link"
 END_EFFECTOR_LINK = "end_effector_link"
+LEFT_TIP_LINK = "robotiq_85_left_finger_tip_link"
+RIGHT_TIP_LINK = "robotiq_85_right_finger_tip_link"
 GRIPPER_JOINT = "robotiq_85_left_knuckle_joint"
 
 # Existing gesture controller uses 0.0 for OPEN and 0.4 for CLOSED.
 OPEN_THRESHOLD = 0.05
 CLOSED_THRESHOLD = 0.30
 
-# The cube must be genuinely near the end effector before a close can pick it.
-# The initial cube is ~14.1 cm from the measured starting end-effector origin,
-# so 12 cm prevents an immediate accidental pickup at startup.
-GRASP_RADIUS = 0.12
+# Measure proximity from the midpoint between the two fingertip links rather
+# than from end_effector_link, which is the gripper mounting frame.
+GRASP_RADIUS = 0.08
+CLOSED_RECHECK_PERIOD = 0.25
+DISTANCE_LOG_PERIOD = 1.0
 
 TOUCH_LINKS = (
     "end_effector_link",
@@ -64,6 +68,10 @@ class PickPlaceWatch(Node):
         self.last_state = None
         self.operation_in_progress = False
         self.pending_action = None
+        self.holding = False
+
+        self.last_closed_check = 0.0
+        self.last_distance_log = 0.0
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(
@@ -107,8 +115,11 @@ class PickPlaceWatch(Node):
             "Watching Robotiq gripper for automatic mock pick/place."
         )
         self.get_logger().info(
-            f"Close pickup radius: {GRASP_RADIUS * 100:.0f} cm from "
-            f"{END_EFFECTOR_LINK}."
+            f"Pickup radius: {GRASP_RADIUS * 100:.0f} cm from the "
+            "midpoint between the two fingertip links."
+        )
+        self.get_logger().info(
+            "While CLOSED, pickup proximity is rechecked automatically."
         )
 
     def on_joint_state(self, msg):
@@ -143,17 +154,34 @@ class PickPlaceWatch(Node):
 
         state = self.classify_gripper()
 
-        if state is None or state == self.last_state:
+        if state is None:
             return
 
-        self.last_state = state
+        changed = state != self.last_state
 
-        self.get_logger().info(
-            f"Gripper entered {state} state "
-            f"({self.gripper_position:.3f} rad)."
-        )
+        if changed:
+            self.last_state = state
+            self.get_logger().info(
+                f"Gripper entered {state} state "
+                f"({self.gripper_position:.3f} rad)."
+            )
 
-        self.request_scene(state)
+        if state == "OPEN":
+            # Query on the transition so a restarted watcher can discover and
+            # detach an already-attached object too.
+            if changed:
+                self.request_scene("OPEN")
+            return
+
+        # CLOSED: if not already holding the cube, keep checking proximity.
+        if self.holding:
+            return
+
+        now = time.monotonic()
+
+        if now - self.last_closed_check >= CLOSED_RECHECK_PERIOD:
+            self.last_closed_check = now
+            self.request_scene("CLOSED")
 
     def request_scene(self, action):
         self.operation_in_progress = True
@@ -167,6 +195,27 @@ class PickPlaceWatch(Node):
 
         future = self.get_scene.call_async(request)
         future.add_done_callback(self.after_scene)
+
+    def fingertip_midpoint(self):
+        left_tf = self.tf_buffer.lookup_transform(
+            BASE_FRAME,
+            LEFT_TIP_LINK,
+            Time(),
+        )
+        right_tf = self.tf_buffer.lookup_transform(
+            BASE_FRAME,
+            RIGHT_TIP_LINK,
+            Time(),
+        )
+
+        left = left_tf.transform.translation
+        right = right_tf.transform.translation
+
+        return (
+            0.5 * (left.x + right.x),
+            0.5 * (left.y + right.y),
+            0.5 * (left.z + right.z),
+        )
 
     def after_scene(self, future):
         try:
@@ -189,6 +238,8 @@ class PickPlaceWatch(Node):
                 None,
             )
 
+            self.holding = attached is not None
+
             if action == "OPEN":
                 if attached is None:
                     self.get_logger().info(
@@ -205,9 +256,6 @@ class PickPlaceWatch(Node):
 
             # CLOSED
             if attached is not None:
-                self.get_logger().info(
-                    "CLOSED: cube is already attached."
-                )
                 self.finish_operation()
                 return
 
@@ -243,43 +291,41 @@ class PickPlaceWatch(Node):
                 return
 
             try:
-                transform = self.tf_buffer.lookup_transform(
-                    BASE_FRAME,
-                    END_EFFECTOR_LINK,
-                    Time(),
-                )
+                grasp_x, grasp_y, grasp_z = self.fingertip_midpoint()
             except Exception as exc:
                 self.get_logger().warning(
-                    f"Could not read end-effector transform: {exc}"
+                    f"Could not read fingertip transforms: {exc}"
                 )
                 self.finish_operation()
                 return
 
             cube_pose = cube.primitive_poses[0]
-            ee = transform.transform.translation
 
-            dx = cube_pose.position.x - ee.x
-            dy = cube_pose.position.y - ee.y
-            dz = cube_pose.position.z - ee.z
+            dx = cube_pose.position.x - grasp_x
+            dy = cube_pose.position.y - grasp_y
+            dz = cube_pose.position.z - grasp_z
             distance = math.sqrt(
                 dx * dx + dy * dy + dz * dz
             )
 
-            self.get_logger().info(
-                f"CLOSED: cube/end-effector distance = "
-                f"{distance * 100:.1f} cm."
-            )
+            now = time.monotonic()
+
+            if (
+                distance <= GRASP_RADIUS
+                or now - self.last_distance_log >= DISTANCE_LOG_PERIOD
+            ):
+                self.last_distance_log = now
+                self.get_logger().info(
+                    "CLOSED: cube/fingertip-midpoint distance = "
+                    f"{distance * 100:.1f} cm."
+                )
 
             if distance > GRASP_RADIUS:
-                self.get_logger().info(
-                    "Pickup ignored: cube is too far away. "
-                    "Open the gripper, approach the cube, then close again."
-                )
                 self.finish_operation()
                 return
 
             self.get_logger().info(
-                "Cube is within pickup radius -> attaching."
+                "Cube is inside grasp radius -> attaching."
             )
             self.apply_attach()
 
@@ -341,10 +387,12 @@ class PickPlaceWatch(Node):
                 )
 
             if self.pending_action == "attach":
+                self.holding = True
                 self.get_logger().info(
                     "PICK COMPLETE: pick_cube attached to gripper."
                 )
             else:
+                self.holding = False
                 self.get_logger().info(
                     "PLACE COMPLETE: pick_cube detached into world."
                 )
