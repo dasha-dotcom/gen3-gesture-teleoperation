@@ -48,7 +48,7 @@ From the repository root **on the Mac**, copy only the Mac scripts:
 
 ```bash
 mkdir -p ~/gen3_camera
-cp scripts/mac/hand_sender.py scripts/mac/hand_sender_gap_test.py ~/gen3_camera/
+cp scripts/mac/hand_combined_sender.py scripts/mac/hand_sender.py scripts/mac/hand_sender_gap_test.py ~/gen3_camera/
 ```
 
 From the repository root **inside Ubuntu**, copy the Ubuntu scripts/configuration:
@@ -58,7 +58,7 @@ mkdir -p ~/gen3_exercises
 cp scripts/ubuntu/*.py scripts/ubuntu/*.yaml ~/gen3_exercises/
 ```
 
-These copy commands replace matching exercise files. If your working copies have newer edits, compare them first. Download or check out this repository in both systems; their home directories are separate. The scripts preserve the tested exercise filenames, including `v3` for the calibrated bridge and `v2` for the offset helper. Older alternatives are not included.
+These copy commands replace matching exercise files. If your working copies have newer edits, compare them first. Download or check out this repository in both systems; their home directories are separate. The current pair is `hand_combined_sender.py --send` on the Mac and `gen3_combined_bridge.py` in Ubuntu (UDP 5007). The `v3` y/z bridge and its port-5005 sender remain earlier exercises; `v2` identifies the offset helper. The restart guide runs tracked files directly from the repository, so copying to these exercise directories is optional.
 
 The Servo configuration and launch are preserved from the exercise instructions. This repository capture has not independently compared them with the VM's current files or relaunched the full stack.
 
@@ -77,4 +77,4 @@ Run these from the repository root. Python 3.9 failed on dependency syntax; Pyth
 
 ## Run the system
 
-Follow [the restart guide](mock-teleoperation.md) for separate robot, temporary gripper fix, Servo, bridge, and camera terminals. Always source ROS and the viewer overlay in fresh Ubuntu exercise terminals.
+Follow [the restart guide](mock-teleoperation.md) for separate robot, controller check/temporary gripper fix, Servo, combined bridge, scene setup, watcher, and camera terminals, plus Home/trial resets. Always source ROS and the viewer overlay in fresh Ubuntu exercise terminals.
