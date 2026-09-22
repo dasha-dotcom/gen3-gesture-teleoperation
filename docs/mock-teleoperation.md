@@ -1,44 +1,28 @@
-# Gen3 camera teleoperation: working milestone
+# Mock Gen3 pick-and-place: startup and operation
 
-Recorded September 19, 2026. Dasha's home Mac + Ubuntu VM setup.
+Current procedure for the September 22, 2026 milestone on Dasha's Mac + Ubuntu ARM64 VM. This assumes the prepared [environment](setup.md), not a verified clean-machine installation. All robot behavior is mock hardware; planning-scene attachment is logical simulated grasping without contact physics.
 
-For copying the tracked scripts to these exercise directories, see [setup](setup.md). For code provenance and remaining checks, see the [milestone record](../notes/2026-09-19.md).
+## Files and prerequisites
 
-## What is working
+Use the current repository checkout at `~/gen3-gesture-teleoperation` on both computers. Commands below run the tracked files directly; the earlier exercise copies under `~/gen3_exercises` are unnecessary for this procedure. Keep `gen3_servo.launch.py` beside `gen3_servo.yaml`. The Mac Python environment remains `~/gen3_camera/.venv311`.
 
-Mac built-in camera → MediaPipe palm coordinates → UDP → Ubuntu hand bridge → MoveIt Servo → Gen3 mock hardware → RViz.
+Use one robot launch, one Servo launch, one combined bridge, one watcher, and one Mac sender. Close older keyboard/hand controllers and UDP receivers. The current pair is `hand_combined_sender.py` + `gen3_combined_bridge.py`, using UDP **5007**, not the older port-5005 y/z pair.
 
-The hand bridge controls translation in base-frame y and z. It sends zero x and angular velocity requests. This is velocity control from hand displacement relative to a calibrated neutral point, not a hand-position-to-tool-position correspondence or an orientation-hold controller.
+The bridge binds `192.168.64.2:5007` and accepts Mac source IP `192.168.64.1`. Check Ubuntu `hostname -I`; if addresses changed, update the sender destination and bridge bind/source filter consistently. Camera access stays on the Mac.
 
-All robot results below are from mock hardware. The seven-joint Gen3 and Robotiq 2F-85 configuration still needs confirmation against the intended lab setup. No physics-based grasping or physical robot performance has been validated.
-
-## Which computer owns which files?
-
-| Location | Files / purpose |
-|---|---|
-| **Mac** `~/gen3_camera/` | `hand_sender.py`, `.venv311/`, optional `hand_sender_gap_test.py` |
-| **Ubuntu VM** `~/gen3_exercises/` | `gen3_hand_bridge_v3.py`, `gen3_servo.yaml`, `gen3_servo.launch.py`, earlier keyboard/offset exercises |
-| **Ubuntu VM** `~/workspace/gen3_viewer_ws/` | Built robot description and MoveIt configuration packages |
-| **Ubuntu VM** `~/workspace/ros2_kortex_ws/src/` | Existing Kinova/Robotiq sources used by the focused build |
-
-These paths are on two separate operating systems. Creating a Mac sender under Ubuntu does not give it access to the Mac camera.
-
-## Before starting
-
-- Use one robot launch, one Servo launch, one hand bridge, and one Mac sender.
-- Close earlier keyboard controllers and UDP preview receivers. The bridge owns UDP port 5005.
-- Do not execute an offset script or an RViz trajectory while the hand bridge controls Servo. It publishes zero requests even while disabled.
-- If programs are already running, do not start duplicates.
-- The bridge currently binds `192.168.64.2:5005` and accepts packets from `192.168.64.1`. The sender targets `192.168.64.2:5005`.
-- In Ubuntu, `hostname -I` should still include `192.168.64.2`. If networking changes, update the addresses consistently before using the scripts.
-
-## Startup after restarting the VM
-
-### 1. Ubuntu terminal A — robot, MoveIt, and RViz
+**In every new Ubuntu terminal**, first run:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 source ~/workspace/gen3_viewer_ws/install/local_setup.bash
+cd ~/gen3-gesture-teleoperation
+```
+
+## Full startup after restarting Ubuntu / MoveIt
+
+### 1. Robot, MoveIt, and RViz — Ubuntu terminal A
+
+```bash
 ros2 launch kinova_gen3_7dof_robotiq_2f_85_moveit_config robot.launch.py \
   robot_ip:=xxx.yyy.zzz.www \
   use_fake_hardware:=true \
@@ -46,15 +30,19 @@ ros2 launch kinova_gen3_7dof_robotiq_2f_85_moveit_config robot.launch.py \
   launch_rviz:=true
 ```
 
-Leave this terminal running. The placeholder IP is used with mock hardware. This launch supplies the robot model, controller manager, joint-state broadcaster, arm trajectory controller, MoveIt, TF, and RViz.
+Leave running. The placeholder IP is for mock hardware. This supplies the robot model, controllers, MoveIt, TF, and RViz.
 
-### 2. Ubuntu terminal B — temporary gripper fix
-
-The configuration asks for a gripper-controller plugin that was unavailable in the installed controller types. The working temporary replacement is `position_controllers/GripperActionController`.
+### 2. Check controllers — Ubuntu terminal B
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source ~/workspace/gen3_viewer_ws/install/local_setup.bash
+ros2 control list_controllers -c /controller_manager
+```
+
+Expected active controllers: `joint_state_broadcaster`, `joint_trajectory_controller`, and `robotiq_gripper_controller`. If the gripper is already active, skip the workaround below.
+
+The installed setup needed a temporary replacement for an unavailable gripper plugin:
+
+```bash
 ros2 param set /controller_manager robotiq_gripper_controller.type position_controllers/GripperActionController
 ros2 run controller_manager spawner robotiq_gripper_controller \
   -c /controller_manager \
@@ -62,131 +50,125 @@ ros2 run controller_manager spawner robotiq_gripper_controller \
 ros2 control list_controllers -c /controller_manager
 ```
 
-Expected active controllers: `joint_state_broadcaster`, `joint_trajectory_controller`, and `robotiq_gripper_controller`. If the gripper is already active, skip setting/spawning it again. Gesture-based gripper commands are not implemented yet.
+Confirm all three are active before continuing.
 
-### 3. Ubuntu terminal C — Servo
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source ~/workspace/gen3_viewer_ws/install/local_setup.bash
-ros2 launch ~/gen3_exercises/gen3_servo.launch.py
-```
-
-Leave it running. The launch reads `gen3_servo.yaml` beside it. It supplies Servo with the Gen3 model, semantic description, kinematics, and joint limits. It adds Servo to the existing robot setup.
-
-Key exercise settings:
-
-- `move_group_name: manipulator`
-- `command_in_type: unitless`
-- `scale.linear: 0.02`
-- `publish_period: 0.02`
-- `incoming_command_timeout: 0.1`
-- `command_out_topic: /joint_trajectory_controller/joint_trajectory`
-- Position output enabled; velocity and acceleration output disabled.
-- Monitored planning scene: `/monitored_planning_scene`; primary monitor false.
-- Smoothing and collision checks enabled.
-
-### 4. Ubuntu terminal D — hand bridge
+### 3. Servo — Ubuntu terminal C
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source ~/workspace/gen3_viewer_ws/install/local_setup.bash
-python3 ~/gen3_exercises/gen3_hand_bridge_v3.py
+ros2 launch ~/gen3-gesture-teleoperation/scripts/ubuntu/gen3_servo.launch.py
 ```
 
-The bridge checks active mock arm hardware and the expected Servo input scaling, selects Twist mode, and unpauses Servo. It opens a hold-to-run window. Wait for data before enabling motion.
+Leave running. The launch loads the adjacent YAML and the external robot description/MoveIt configuration. Key settings are `manipulator`, unitless input, linear scale 0.02 m/s, publish period 0.02 s, command timeout 0.1 s, position trajectories to `/joint_trajectory_controller/joint_trajectory`, and enabled smoothing/collision checks.
 
-### 5. Mac Terminal — camera sender
+### 4. Combined bridge — Ubuntu terminal D
 
 ```bash
-cd ~/gen3_camera
-source .venv311/bin/activate
-python hand_sender.py
+python3 scripts/ubuntu/gen3_combined_bridge.py
 ```
 
-The normal sender has no intentional pause. It displays a mirrored camera preview and sends a sequence number, hand-detected flag, and normalized palm center at up to approximately 20 messages/second. Video is not transmitted to Ubuntu. Keep only the intended tracking hand visible.
+Leave the hold-to-run window open with Space released. The bridge checks mock arm/gripper hardware and Servo scaling, selects Twist mode, and unpauses Servo. It needs both the gripper action server and MoveIt Home recovery services/action.
 
-### 6. Calibrate and operate
+### 5. Cube and drop zone — sourced Ubuntu terminal B
 
-1. Focus the Ubuntu bridge window, with Space released.
-2. Hold your palm comfortably and tap **C**. Calibration requires the palm coordinates to be between 0.2 and 0.8 on both axes, away from the image edges.
-3. Confirm that the hand preview is zero near this resting position.
-4. Hold **Space** in the Ubuntu window to enable motion; release to stop requesting motion.
-5. Palm right/left of neutral requests +y/−y. Palm above/below neutral requests +z/−z. Moving diagonally requests both.
+```bash
+python3 scripts/ubuntu/pick_place_scene.py add
+python3 scripts/ubuntu/pick_place_scene.py allow-gripper-contact
+python3 scripts/ubuntu/drop_zone_scene.py add
+```
 
-Neutral means your calibrated palm position, not necessarily the image center. Each axis has its own rest zone (±0.1 normalized image coordinate). Equal offsets from neutral give equal-magnitude positive/negative requests along that axis. The combined requested speed is capped at 10 mm/s with the checked Servo scaling. Actual robot motion can differ because of timing, smoothing, and limits.
+Verify the green cube and blue target in RViz. Restarting MoveIt clears the planning scene, so recreate both objects and the gripper contact allowances afterward. Do not add/reset a cube while it is attached; use the reset procedure below.
 
-There is no hold-duration limit in v3. Calibration is held in memory and must be repeated after restarting the bridge.
+### 6. Watcher — Ubuntu terminal E
 
-## Stopping behavior and restart rules
+```bash
+python3 scripts/ubuntu/pick_place_watch.py
+```
 
-| Condition | Intended bridge behavior |
+Leave running. It monitors the actual gripper joint and planning scene, independently of Space. CLOSED within the 8 cm fingertip-midpoint radius attaches the cube; OPEN while attached detaches it and checks the drop zone. It continues checking proximity while CLOSED, so attachment need not occur exactly at the close transition.
+
+### 7. Camera sender — Mac terminal
+
+```bash
+cd ~/gen3-gesture-teleoperation
+source ~/gen3_camera/.venv311/bin/activate
+python scripts/mac/hand_combined_sender.py --send
+```
+
+Without `--send` this script only previews. Keep one tracking hand visible, palm toward the camera. Packets contain session, sequence, hand flag, palm center, pixel palm width, and stabilized gesture at up to about 20 Hz. Q closes the camera preview.
+
+### 8. Calibrate and operate
+
+1. Focus the Ubuntu combined-bridge window with Space released.
+2. Hold the palm at a comfortable neutral position, away from image edges (u/v each 0.2–0.8), and press **C**. This saves both position and apparent width.
+3. Confirm near-zero motion preview at rest. Hold **Space** to enable arm and gripper input.
+4. Move the hand right/left for +y/−y, up/down for +z/−z, closer/farther for +x/−x via apparent width. Release Space to disable input.
+5. Approach the cube OPEN, then make a CLOSED gesture while enabled. Wait for `PICK COMPLETE` before transporting it.
+6. Move over the blue target, make OPEN while enabled, and inspect `PLACE COMPLETE` followed by `TASK SUCCESS` or `TASK MISSED`.
+
+Neutral dead zones are ±0.1 for u/v and width ratio 0.90–1.10. z is scaled by 2/3 before the 3D normalization. The total requested speed is capped at 20 mm/s with this Servo configuration; actual speed depends on Servo limits/smoothing. Width is not metric depth, and rotating the palm can change x input. Angular requests remain zero.
+
+OPEN targets 0.0 rad and CLOSED targets 0.4 rad (partial close). UNCERTAIN sends no new gripper goal but can still permit arm translation. Space release prevents new teleoperation input; an already-issued gripper action can still finish. These are not physical emergency-stop guarantees.
+
+## Manual Home move and standardized trial reset
+
+Use the same starting configuration for each recorded trial: robot **Home**, gripper **OPEN**, cube center **(0.537, 0.004, 0.327) m**, drop-zone center **(0.50, −0.18, 0.20) m**, with both objects created in `base_link`.
+
+1. If holding a cube, open the gripper using the enabled gesture control with the palm near neutral; wait for detachment, then release Space. Ensure the gripper is OPEN. If the controller is faulted, resolve/restart it before beginning another trial.
+2. With Space released, pause Servo in a sourced Ubuntu terminal:
+
+   ```bash
+   ros2 service call /servo_node/pause_servo std_srvs/srv/SetBool "{data: true}"
+   ```
+
+   Require `success: true`. Releasing Space alone is insufficient for a planned move because the bridge still publishes zero Twist commands.
+3. In RViz MotionPlanning, select the `manipulator` group and named goal **Home**, use the current robot state as start, then **Plan & Execute**. Wait for successful completion. Do not start a competing Home move during automatic recovery.
+4. Resume Servo only after the planned move completes:
+
+   ```bash
+   ros2 service call /servo_node/pause_servo std_srvs/srv/SetBool "{data: false}"
+   ```
+
+   Require `success: true`. Pausing leaves the Servo process running; Ctrl+C would terminate it.
+5. With gripper OPEN and cube detached, reset the cube:
+
+   ```bash
+   python3 scripts/ubuntu/pick_place_scene.py remove
+   python3 scripts/ubuntu/pick_place_scene.py add
+   python3 scripts/ubuntu/pick_place_scene.py allow-gripper-contact
+   ```
+
+   Leave the existing drop zone unchanged; if absent after a scene restart, recreate it with `python3 scripts/ubuntu/drop_zone_scene.py add`. The `remove` operation removes the world object, not an attached object. For a manual attachment cleanup, stop the watcher, use `pick_place_scene.py detach`, then remove/add, ensure the gripper is OPEN, and restart the watcher.
+6. Confirm Home/open gripper/cube/target visually, refocus the bridge, release Space, press **C**, and start the next trial with a fresh Space press.
+
+The watcher, sender, bridge, and Servo can stay running during a normal reset with an OPEN gripper. A CLOSED gripper can trigger the independent watcher, so avoid resetting in that state. After any manual scene manipulation, restart the watcher if its holding state no longer matches the scene.
+
+The target is 14 × 14 cm. Success tests the cube center against ±7 cm x/y bounds, not height, full-cube containment, or physical resting contact. Record watcher pick/place timestamps and final dx/dy; planar error is `sqrt(dx² + dy²)`. Record misses/re-grasps separately and distinguish successful re-pick timing from the full recovery interval. See [the five-trial record](../notes/2026-09-22.md).
+
+## Singularity recovery and restarts
+
+On a Servo singularity halt, the bridge automatically disables webcam input, invalidates calibration, pauses Servo, and executes a MoveIt Home trajectory. It then unpauses Servo and stays disabled until **release Space → C → fresh Space press**. Space release does not stop that planned Home motion. On failure, input remains faulted and Servo may remain paused; inspect the reported error and recover/restart manually before resuming.
+
+| Event | Required action |
 |---|---|
-| Space released | Send zero; next fresh press can enable |
-| Hand leaves camera view | Clear enable state and send zero |
-| No new accepted message for over 0.5 s | Clear enable state and send zero |
-| Hand/messages return | Stay disabled until release and fresh Space press |
-| Window loses focus or Escape pressed | Clear enable state and send zero |
-| Window update gap over 0.15 s | Clear enable state and show delay reason |
-| Servo subscriber count differs from one | Clear enable state and send zero |
-| Window closes normally | Send zero requests briefly before exiting |
+| Hand loss, >0.5 s accepted-data gap, focus loss, Escape, delayed GUI, unexpected subscriber count | Resolve cause, release Space, then fresh press; recalibrate if neutral changed |
+| Mac sender restart / changed session | Restart combined bridge and recalibrate; sender sequence/session are new |
+| Bridge restart | Recalibrate; startup selects Twist and unpauses Servo |
+| Servo restart | With Space released, restart bridge to recheck/select Twist/unpause, then recalibrate |
+| MoveIt / VM restart | Full startup; recreate cube, contact allowances, and drop zone; restart watcher |
+| Gripper failure or recovery failure | Resolve reported fault and restart bridge; do not assume action completion |
 
-Space-release handling includes a 40 ms key-repeat debounce. None of these settings is a measured physical stopping time.
-
-Servo additionally has its own 0.1 s command-age timeout if the bridge stops sending. The bridge's 0.5 s timeout applies to hand-data arrivals and is a separate layer.
-
-The protocol currently checks increasing sequence numbers and receipt freshness. It does not authenticate the sender or measure camera-capture-to-robot latency; a new arrival is not proof of a recently captured frame. This is an exercise protocol for the local mock setup.
-
-**If the Mac sender restarts, restart the bridge before starting it again.** The sender's sequence number resets to zero; the bridge otherwise rejects those lower numbers. Recalibrate afterward. A bridge restart while the sender continues also requires recalibration.
-
-## Shutdown
-
-1. Release Space.
-2. Close the Ubuntu hand-bridge window.
-3. Press **Q** in the Mac camera window.
-4. If ending the session, stop the Servo launch with Ctrl+C, then the robot launch with Ctrl+C.
-
-Closing RViz alone is not the same as stopping the robot/controller launch.
-
-## Verification evidence so far
-
-- Robot model and seven arm joints visible in RViz; mock controllers active.
-- MoveIt planning/execution, direct arm trajectories, and gripper open/partial-close commands succeeded.
-- Offset helper verified base-frame x/y/z endpoint movements; a straight tool path was not enforced.
-- Planned-motion execution-action cancellation remained ineffective in the observed test: cancellation was answered after execution finished.
-- A separate `stop` message on `/trajectory_execution_event` interrupted planned motion; the joint controller canceled and MoveIt reported PREEMPTED. A subsequent fresh movement succeeded.
-- Servo short velocity input and explicit-zero stop tested.
-- Basic Servo input-disappearance test produced a stationary pose afterward; exact stop latency was not measured.
-- Keyboard x/y/z movement and focus-loss disabled indication tested.
-- Mac camera/MediaPipe hand tracking and UDP connection to Ubuntu tested.
-- Calibrated hand y/z control moved the mock robot. Space-release status and stable final TF samples observed.
-- Hand removed while Space held: user observed stopping; hand return did not re-enable motion.
-- Timed sender stopped messages for three seconds while tracking continued: user observed the specific hand-data-gap stop message; resumed messages did not re-enable motion.
-
-Latest isolated z recording: approximately 17.137 mm downward and 10.533 mm upward; y changed 0.114 mm, x varied 0.003 mm, net orientation changed about 0.029 degrees; final pose stable for about three seconds. Unequal travel does not imply unequal gain without matched input amplitudes and times.
-
-An earlier mixed-axis recording showed about 1.4 degrees net orientation change. Its cause remains unresolved. Zero angular velocity requests do not provide active correction back to a fixed orientation.
-
-## Known limitations and next work
-
-- Latest normal sender preserves the previously exercised sending loop and removes only the test pause; syntax checked, fresh end-to-end run still to be confirmed.
-- ROS/GUIs run in the user's Ubuntu VM; local automated checks covered mapping/gating logic, not the complete ROS stack.
-- Exact stop latency, packet-delay behavior, long-duration drift, and all fault paths are not quantified.
-- Continuous commands currently cover y/z only. Webcam-derived forward/backward x control, orientation control, and gesture gripper control remain to implement.
-- No reliable emergency-stop claim, physical grasp/contact validation, or real-robot readiness claim follows from these mock tests.
-- Next development step: identify open/closed-hand gestures as displayed labels first, then integrate gripper commands deliberately.
-
-## Mac dependency notes
-
-Python 3.11 virtual environment `.venv311`; MediaPipe 0.10.21; OpenCV contrib 4.11.0.86 (import prints 4.11.0).
-
-Python 3.9 installation failed on newer syntax in a JAX dependency. The replacement environment imports successfully. MediaPipe's installed wheel metadata declares an Intel tag despite the main binary including ARM64 support, so `pip check` reports a platform warning. Blank-image inference and live camera hand tracking both worked on this Mac. The warning has not been hidden or repaired.
-
-Dependencies can be recorded without downloading anything:
+For `Command type has not been set, cannot accept input`, first check for an unintended Servo restart or duplicate node. With Space released, this selects Twist if needed:
 
 ```bash
-# Mac, with .venv311 active
-python -m pip freeze > ~/gen3_camera/requirements-mac-snapshot.txt
+ros2 service call /servo_node/switch_command_type moveit_msgs/srv/ServoCommandType "{command_type: 1}"
 ```
 
-This snapshot is for reproducing the Mac environment, not an Ubuntu requirements file.
+Normal bridge startup already does this. It is **not** a required step after every Home move. Confirm success and unpause only when no planned move is active, then recalibrate.
+
+## Shutdown and evidence limits
+
+Release Space, close the bridge, press Q in the Mac preview, stop the watcher, then stop Servo and the robot launch with Ctrl+C when ending the session. Closing RViz alone does not stop controllers. If Home/gripper actions are in progress, confirm their status; closing a window or requesting action cancellation is not proof of a stopped trajectory.
+
+The milestone was exercised interactively in the user's VM. This documentation update does not rerun ROS or validate a clean installation. Exact stopping latency, packet delay, drift, physical contact, and real-robot readiness remain unvalidated. Earlier planned-motion action cancellation was ineffective in an observed test; details and the separately observed stop-event mechanism remain in [scripts/README](../scripts/README.md).
+
+Mac environment: Python 3.11, MediaPipe 0.10.21, OpenCV contrib 4.11.0.86. The MediaPipe wheel's platform-tag warning remains documented in [setup](setup.md).
