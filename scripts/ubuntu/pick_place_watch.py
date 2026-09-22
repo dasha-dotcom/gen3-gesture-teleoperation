@@ -296,7 +296,10 @@ class PickPlaceWatch(Node):
                 self.finish_operation()
                 return
 
-            cube_pose = cube.primitive_poses[0]
+            # MoveIt stores the object's actual pose separately from
+            # primitive_poses, which are relative to the object.
+            # For this single-box pick_cube, cube.pose is its center.
+            cube_pose = cube.pose
 
             dx = cube_pose.position.x - grasp_x
             dy = cube_pose.position.y - grasp_y
@@ -394,6 +397,7 @@ class PickPlaceWatch(Node):
                 self.get_logger().info(
                     "PLACE COMPLETE: pick_cube detached into world."
                 )
+                self.check_drop_result()
 
         except Exception as exc:
             self.get_logger().error(
@@ -402,6 +406,115 @@ class PickPlaceWatch(Node):
 
         finally:
             self.finish_operation()
+
+    def check_drop_result(self):
+        """Check whether the released cube is inside the drop zone."""
+        request = GetPlanningScene.Request()
+        request.components.components = (
+            PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
+        )
+
+        future = self.get_scene.call_async(request)
+        future.add_done_callback(self.after_drop_scene)
+
+    def after_drop_scene(self, future):
+        try:
+            response = future.result()
+
+            if response is None:
+                raise RuntimeError(
+                    "No response while checking drop result"
+                )
+
+            objects = response.scene.world.collision_objects
+
+            cube = next(
+                (
+                    item
+                    for item in objects
+                    if item.id == OBJECT_ID
+                ),
+                None,
+            )
+
+            zone = next(
+                (
+                    item
+                    for item in objects
+                    if item.id == "drop_zone"
+                ),
+                None,
+            )
+
+            if cube is None:
+                self.get_logger().warning(
+                    "TASK CHECK: pick_cube not found in world."
+                )
+                return
+
+            if zone is None:
+                self.get_logger().warning(
+                    "TASK CHECK: drop_zone not found in world."
+                )
+                return
+
+            cube_frame = cube.header.frame_id or BASE_FRAME
+            zone_frame = zone.header.frame_id or BASE_FRAME
+
+            if cube_frame != zone_frame:
+                self.get_logger().warning(
+                    "TASK CHECK: cube and drop zone use different "
+                    f"frames ({cube_frame!r} vs {zone_frame!r})."
+                )
+                return
+
+            if not zone.primitives:
+                self.get_logger().warning(
+                    "TASK CHECK: drop_zone has no geometry."
+                )
+                return
+
+            cube_pos = cube.pose.position
+            zone_pos = zone.pose.position
+
+            dimensions = zone.primitives[0].dimensions
+
+            if len(dimensions) < 2:
+                self.get_logger().warning(
+                    "TASK CHECK: invalid drop-zone dimensions."
+                )
+                return
+
+            half_x = dimensions[0] / 2.0
+            half_y = dimensions[1] / 2.0
+
+            dx = cube_pos.x - zone_pos.x
+            dy = cube_pos.y - zone_pos.y
+
+            inside = (
+                abs(dx) <= half_x
+                and abs(dy) <= half_y
+            )
+
+            self.get_logger().info(
+                "Drop check: "
+                f"dx={dx * 100:.1f} cm, "
+                f"dy={dy * 100:.1f} cm."
+            )
+
+            if inside:
+                self.get_logger().info(
+                    "TASK SUCCESS: cube released inside drop zone!"
+                )
+            else:
+                self.get_logger().info(
+                    "TASK MISSED: cube released outside drop zone."
+                )
+
+        except Exception as exc:
+            self.get_logger().error(
+                f"Drop-zone check failed: {exc}"
+            )
 
     def finish_operation(self):
         self.operation_in_progress = False
